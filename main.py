@@ -127,34 +127,14 @@ sys.stdout.reconfigure(line_buffering=True)
 print("starting...", flush=True)
 print(f"📋 Carregados {len(PROXY_LIST)} proxies", flush=True)
 
-def detect_proxy_type(host, port):
-    """Detecta o tipo do proxy baseado na porta"""
-    # Portas comuns para SOCKS
-    socks_ports = [1080, 1081, 1082, 1088, 9050, 9051, 9056, 9058, 9059, 9060, 9061, 9064, 9065, 9067, 9150]
-    # Portas comuns para HTTP
-    http_ports = [80, 8080, 8081, 8082, 8085, 8088, 8090, 3128, 8000, 8888, 999, 9999]
-    
-    if port in socks_ports:
-        return "socks4"  # Tentar SOCKS4 primeiro
-    elif port in http_ports:
-        return "http"
-    else:
-        # Tentar HTTP primeiro, depois SOCKS
-        return "http"
-
-def test_proxy(host, port, proxy_type):
-    """Testa se o proxy está funcionando"""
+def test_proxy(host, port):
+    """Testa se o proxy HTTP está funcionando"""
     try:
-        if proxy_type == "http":
-            proxy_url = f"http://{host}:{port}"
-            proxies = {"http": proxy_url, "https": proxy_url}
-        else:
-            proxy_url = f"{proxy_type}://{host}:{port}"
-            proxies = {"http": proxy_url, "https": proxy_url}
-        
+        proxy_url = f"http://{host}:{port}"
+        proxies = {"http": proxy_url, "https": proxy_url}
         r = requests.get("https://httpbin.org/ip", proxies=proxies, timeout=5)
         if r.status_code == 200:
-            print(f"✅ Proxy funcionando: {proxy_type}://{host}:{port} -> IP: {r.json()['origin']}", flush=True)
+            print(f"✅ Proxy funcionando: {host}:{port} -> IP: {r.json()['origin']}", flush=True)
             return True
     except:
         pass
@@ -162,38 +142,26 @@ def test_proxy(host, port, proxy_type):
 
 # Testar proxies e encontrar um funcionando
 selected_proxy = None
-print("🔍 Testando proxies...", flush=True)
+print("🔍 Testando proxies HTTP...", flush=True)
 
-# Embaralhar a lista para testar aleatoriamente
+# Embaralhar a lista
 random.shuffle(PROXY_LIST)
 
-for proxy_str in PROXY_LIST[:50]:  # Testa até 50 proxies
+for proxy_str in PROXY_LIST[:100]:  # Testa até 100 proxies
     try:
         host, port = proxy_str.split(":")
         port = int(port)
         
-        # Tentar HTTP primeiro
-        if test_proxy(host, port, "http"):
-            selected_proxy = {"type": "http", "host": host, "port": port}
+        if test_proxy(host, port):
+            selected_proxy = {"host": host, "port": port}
             break
-        
-        # Se HTTP falhar, tentar SOCKS4
-        if test_proxy(host, port, "socks4"):
-            selected_proxy = {"type": "socks4", "host": host, "port": port}
-            break
-            
-        # Tentar SOCKS5
-        if test_proxy(host, port, "socks5"):
-            selected_proxy = {"type": "socks5", "host": host, "port": port}
-            break
-            
-    except Exception as e:
+    except:
         continue
 
 if not selected_proxy:
     print("⚠️ Nenhum proxy funcionou, continuando sem proxy...", flush=True)
 else:
-    print(f"🎯 Proxy selecionado: {selected_proxy['type']}://{selected_proxy['host']}:{selected_proxy['port']}", flush=True)
+    print(f"🎯 Proxy selecionado: {selected_proxy['host']}:{selected_proxy['port']}", flush=True)
 
 # Gerar par de chaves RSA
 key = RSA.generate(2048)
@@ -223,6 +191,7 @@ def heartbeat_thread(ws, interval):
         while True:
             time.sleep(interval / 1000)
             ws.send(json.dumps({"op": "heartbeat"}))
+            print("💓 Heartbeat", flush=True)
     
     thread = threading.Thread(target=heartbeat)
     thread.daemon = True
@@ -264,40 +233,43 @@ def on_message(ws, message):
         ticket = packet["ticket"]
         print(f"🎫 Ticket: {ticket[:50]}...", flush=True)
         
-        # Fazer requisição via proxy
+        # Fazer requisição via proxy (se tiver)
         session = requests.Session()
         
         if selected_proxy:
-            proxy_url = f"{selected_proxy['type']}://{selected_proxy['host']}:{selected_proxy['port']}"
+            proxy_url = f"http://{selected_proxy['host']}:{selected_proxy['port']}"
             session.proxies.update({"http": proxy_url, "https": proxy_url})
-            print(f"🔄 Usando proxy para requisição final", flush=True)
+            print(f"🔄 Usando proxy para requisição: {selected_proxy['host']}:{selected_proxy['port']}", flush=True)
         
-        response = session.post(
-            "https://discord.com/api/v9/users/@me/remote-auth/login",
-            json={"ticket": ticket},
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=15
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            cipher = PKCS1_OAEP.new(private_key, hashAlgo=SHA256)
-            token = cipher.decrypt(base64.b64decode(data["encrypted_token"])).decode()
-            print(f"\n{'='*60}", flush=True)
-            print(f"✅ TOKEN: {token}", flush=True)
-            print(f"{'='*60}\n", flush=True)
+        try:
+            response = session.post(
+                "https://discord.com/api/v9/users/@me/remote-auth/login",
+                json={"ticket": ticket},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                timeout=15
+            )
             
-            with open("token.txt", "w") as f:
-                f.write(token)
-            print("💾 Token salvo em token.txt", flush=True)
-        else:
-            print(f"❌ Erro: {response.status_code}", flush=True)
-            print(response.json(), flush=True)
+            if response.status_code == 200:
+                data = response.json()
+                cipher = PKCS1_OAEP.new(private_key, hashAlgo=SHA256)
+                token = cipher.decrypt(base64.b64decode(data["encrypted_token"])).decode()
+                print(f"\n{'='*60}", flush=True)
+                print(f"✅ TOKEN: {token}", flush=True)
+                print(f"{'='*60}\n", flush=True)
+                
+                with open("token.txt", "w") as f:
+                    f.write(token)
+                print("💾 Token salvo em token.txt", flush=True)
+            else:
+                print(f"❌ Erro: {response.status_code}", flush=True)
+                print(response.json(), flush=True)
+        except Exception as e:
+            print(f"❌ Erro na requisição: {e}", flush=True)
         
         ws.close()
 
 def on_error(ws, error):
-    print(f"❌ Erro: {error}", flush=True)
+    print(f"❌ Erro WebSocket: {error}", flush=True)
 
 def on_close(ws, close_status_code, close_msg):
     print(f"🔌 Conexão fechada", flush=True)
@@ -308,50 +280,19 @@ def on_open(ws):
 def main():
     ws_url = "wss://remote-auth-gateway.discord.gg/?v=2"
     
-    # Configurar WebSocket com proxy
-    if selected_proxy and selected_proxy["type"] == "http":
-        print(f"🔄 Conectando via proxy HTTP: {selected_proxy['host']}:{selected_proxy['port']}", flush=True)
-        ws = websocket.WebSocketApp(
-            ws_url,
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            header={
-                "Origin": "https://discord.com",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            },
-            http_proxy_host=selected_proxy["host"],
-            http_proxy_port=selected_proxy["port"]
-        )
-    elif selected_proxy and selected_proxy["type"] in ["socks4", "socks5"]:
-        print(f"🔄 Conectando via proxy {selected_proxy['type'].upper()}: {selected_proxy['host']}:{selected_proxy['port']}", flush=True)
-        # Para SOCKS, tentamos primeiro sem proxy no WebSocket (a requisição HTTP final ainda usa)
-        # pois WebSocket com SOCKS no Replit/Railway é complicado
-        ws = websocket.WebSocketApp(
-            ws_url,
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            header={
-                "Origin": "https://discord.com",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-        )
-        print("⚠️ WebSocket sem proxy (a requisição final usará proxy SOCKS)", flush=True)
-    else:
-        ws = websocket.WebSocketApp(
-            ws_url,
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            header={
-                "Origin": "https://discord.com",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-        )
+    print(f"🌐 Conectando WebSocket...", flush=True)
+    
+    ws = websocket.WebSocketApp(
+        ws_url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+        header={
+            "Origin": "https://discord.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+    )
     
     websocket.enableTrace(False)
     ws.run_forever()
