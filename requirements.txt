@@ -1,0 +1,4 @@
+qrcode
+websocket-client
+pycryptodome
+requests
